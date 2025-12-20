@@ -1,0 +1,12 @@
+[package]
+name = "custom_vulkan_renderer_exp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glam = { version = "0.30.9", features = ["mint"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
+vulkano = { version = "0.35.2", default-features = false, features = ["macros"] }
+vulkano-shaders = "0.35.0"
+winit = { version = "0.30.12", default-features = false, features = ["mint", "rwh_06", "wayland"] }
