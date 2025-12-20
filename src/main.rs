@@ -1,24 +1,24 @@
 use std::sync::Arc;
 
-use glam::{Mat4, vec3};
+use glam::{Mat4, Quat, Vec3, vec3};
 use tracing::info;
 use vulkano::{
     Validated, VulkanError, VulkanLibrary,
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, CopyImageInfo, ImageCopy,
-        allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, CommandBufferUsage, allocator::StandardCommandBufferAllocator,
     },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags,
         physical::PhysicalDeviceType,
     },
-    image::{Image, ImageCreateInfo, ImageLayout, ImageUsage, view::ImageView},
+    image::{Image, ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
-    memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator},
+    memory::allocator::StandardMemoryAllocator,
     swapchain::{
-        self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image,
+        CompositeAlpha, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+        acquire_next_image,
     },
-    sync::{self, GpuFuture as _},
+    sync::GpuFuture as _,
 };
 use winit::{application::ApplicationHandler, event_loop::EventLoop, window::Window};
 
@@ -111,12 +111,13 @@ fn main() {
             command_buffer_allocator,
         ),
         render_reqs: None,
+        a: 0.0,
+        recreate_swapchain: false,
     };
     event_loop.run_app(&mut app).unwrap();
 }
 struct RenderRequirements {
     window: Arc<Window>,
-    view: View,
     swapchain: Arc<Swapchain>,
     swap_images: Vec<Arc<Image>>,
     render_pipeline: RenderPipeline,
@@ -124,6 +125,8 @@ struct RenderRequirements {
 struct WinitApp {
     renderer: Renderer,
     render_reqs: Option<RenderRequirements>,
+    a: f32,
+    recreate_swapchain: bool,
 }
 impl ApplicationHandler for WinitApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -158,39 +161,16 @@ impl ApplicationHandler for WinitApp {
                     image_format,
                     image_extent: window_size.into(),
                     image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
-                    composite_alpha: surface_capabilities
-                        .supported_composite_alpha
-                        .into_iter()
-                        .next()
-                        .unwrap(),
+                    composite_alpha: CompositeAlpha::Opaque,
                     ..Default::default()
                 },
             )
             .unwrap()
         };
-        let tmp_image = Image::new(
-            self.renderer.malloc.clone(),
-            ImageCreateInfo {
-                format: image_format,
-                extent: [window_size.width, window_size.height, 1],
-                usage: ImageUsage::TRANSFER_SRC | ImageUsage::COLOR_ATTACHMENT,
-                initial_layout: ImageLayout::Undefined,
-                ..Default::default()
-            },
-            AllocationCreateInfo::default(),
-        )
-        .unwrap();
-        let ratio = window_size.height as f32 / window_size.width as f32;
-        let views = [View {
-            world_to_view: Mat4::perspective_rh(90f32.to_radians(), ratio, 0.0, 1000.0),
-            target_backing: tmp_image.clone(),
-            target: ImageView::new_default(tmp_image).unwrap(),
-        }];
-        let render_pipeline = RenderPipeline::new(&self.renderer, &views);
+        let render_pipeline = RenderPipeline::new(&self.renderer, &[image_format]);
 
         self.render_reqs = Some(RenderRequirements {
             window,
-            view: views.into_iter().next().unwrap(),
             swapchain,
             swap_images: images,
             render_pipeline,
@@ -204,8 +184,8 @@ impl ApplicationHandler for WinitApp {
         event: winit::event::WindowEvent,
     ) {
         match event {
-            winit::event::WindowEvent::Resized(physical_size) => {
-                info!("resized: {physical_size:?}");
+            winit::event::WindowEvent::Resized(_physical_size) => {
+                self.recreate_swapchain = true;
             }
             winit::event::WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -219,26 +199,36 @@ impl ApplicationHandler for WinitApp {
             //     is_synthetic,
             // } => {}
             winit::event::WindowEvent::RedrawRequested => {
-                if let Some(reqs) = self.render_reqs.as_ref() {
+                if let Some(reqs) = self.render_reqs.as_mut() {
+
+                    if self.recreate_swapchain {
+                        self.recreate_swapchain = false;
+                        let (swap, images) = reqs
+                            .swapchain
+                            .recreate(SwapchainCreateInfo {
+                                image_extent: reqs.window.inner_size().into(),
+                                ..reqs.swapchain.create_info()
+                            })
+                            .unwrap();
+                        reqs.swapchain = swap;
+                        reqs.swap_images = images;
+                    }
                     let (index, suboptimal, acquire_future) =
                         match acquire_next_image(reqs.swapchain.clone(), None)
                             .map_err(Validated::unwrap)
                         {
                             Ok(v) => v,
                             Err(VulkanError::OutOfDate) => {
-                                panic!("a");
-                                return;
-                            }
-                            Err(VulkanError::Timeout) => {
-                                // info!("timeout");
+                                self.recreate_swapchain = true;
                                 return;
                             }
                             Err(err) => panic!("{}", err),
                         };
+                    self.recreate_swapchain |= suboptimal;
                     let vertex_positions = &[
-                        vec3(-1.0, -1.0, 0.0),
-                        vec3(-1.0, 1.0, 0.0),
-                        vec3(1.0, -1.0, 0.0),
+                        vec3(-1.0, 0.0, -0.5),
+                        vec3(-1.0, 1.0, -0.5),
+                        vec3(1.0, 1.0, -0.5),
                     ];
                     let mut builder = AutoCommandBufferBuilder::primary(
                         self.renderer.cballoc.clone(),
@@ -246,17 +236,23 @@ impl ApplicationHandler for WinitApp {
                         CommandBufferUsage::OneTimeSubmit,
                     )
                     .unwrap();
+                    let target_image = reqs.swap_images[index as usize].clone();
+                    let ratio = target_image.extent()[0] as f32 / target_image.extent()[1] as f32;
+                    let mat = Mat4::perspective_rh(90f32.to_radians(), ratio, 0.0, 1000.0)
+                        * (Mat4::from_quat(Quat::from_rotation_z(0.3 * self.a))
+                            * Mat4::from_translation((Vec3::Y + Vec3::Z) * self.a))
+                        .inverse();
                     self.renderer.record_render_commands(
+                        &[View {
+                            world_to_clip: mat,
+                            target_backing: target_image.clone(),
+                            target: ImageView::new_default(target_image).unwrap(),
+                        }],
                         vertex_positions,
                         &reqs.render_pipeline,
                         &mut builder,
                     );
-                    builder
-                        .copy_image(CopyImageInfo::images(
-                            reqs.view.target_backing.clone(),
-                            reqs.swap_images[index as usize].clone(),
-                        ))
-                        .unwrap();
+                    self.a += 0.001;
                     let command_buffer = builder.build().unwrap();
 
                     let future = acquire_future

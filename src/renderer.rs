@@ -1,34 +1,34 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use glam::{Mat4, Vec3};
 use vulkano::{
     Version,
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     command_buffer::{
-        AutoCommandBufferBuilder, RenderPassBeginInfo, allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, RenderingAttachmentInfo, RenderingInfo,
+        allocator::StandardCommandBufferAllocator,
     },
+    descriptor_set::{WriteDescriptorSet, layout::DescriptorSetLayoutCreateFlags},
     device::{Device, DeviceExtensions, DeviceFeatures, Queue, physical::PhysicalDevice},
-    image::{Image, ImageLayout, SampleCount, view::ImageView},
+    format::Format,
+    image::{Image, view::ImageView},
     instance::{Instance, InstanceExtensions},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
-        GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo,
+        DynamicState, GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
         graphics::{
             GraphicsPipelineCreateInfo,
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
             input_assembly::InputAssemblyState,
             multisample::MultisampleState,
             rasterization::RasterizationState,
+            subpass::{PipelineRenderingCreateInfo, PipelineSubpassType},
             vertex_input::{Vertex, VertexDefinition as _},
             viewport::{Scissor, Viewport, ViewportState},
         },
         layout::PipelineDescriptorSetLayoutCreateInfo,
     },
-    render_pass::{
-        AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp,
-        Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, Subpass,
-        SubpassDescription,
-    },
+    render_pass::{AttachmentLoadOp, AttachmentStoreOp},
 };
 
 pub struct Renderer {
@@ -51,12 +51,13 @@ impl Renderer {
     // required vulkan version: 1.2
     pub const fn required_device_exts() -> DeviceExtensions {
         DeviceExtensions {
+            khr_dynamic_rendering: true,
+            khr_dynamic_rendering_local_read: false,
+            ext_extended_dynamic_state: true,
+            khr_push_descriptor: true,
             // khr_draw_indirect_count: true,
-            khr_fragment_shading_rate: true,
             khr_global_priority: false,
-            khr_line_rasterization: false,
             // khr_performance_query: (),
-            khr_push_descriptor: false,
             khr_synchronization2: true,
             // khr_timeline_semaphore: true,
             ext_external_memory_acquire_unmodified: false,
@@ -75,6 +76,9 @@ impl Renderer {
     pub const fn required_device_features() -> DeviceFeatures {
         DeviceFeatures {
             multiview: true,
+            dynamic_rendering: true,
+            extended_dynamic_state: true,
+            runtime_descriptor_array: true,
             ..DeviceFeatures::empty()
         }
     }
@@ -97,7 +101,7 @@ impl Renderer {
     }
     pub fn record_render_commands<L>(
         &self,
-        // views: &[View],
+        views: &[View],
         vertex_positions: &[Vec3],
         render_pipeline: &RenderPipeline,
         builder: &mut AutoCommandBufferBuilder<L>,
@@ -118,17 +122,70 @@ impl Renderer {
             }),
         )
         .unwrap();
+        let views_buffer = Buffer::from_iter(
+            self.malloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            views.iter().map(|v| ViewData {
+                world_to_clip: v.world_to_clip.to_cols_array_2d(),
+            }),
+        )
+        .unwrap();
 
         builder
-            .begin_render_pass(
-                RenderPassBeginInfo {
-                    clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
-                    ..RenderPassBeginInfo::framebuffer(render_pipeline.framebuffer.clone())
-                },
-                Default::default(),
+            .begin_rendering(RenderingInfo {
+                layer_count: 0,
+                view_mask: mask_from_len(views.len()),
+                color_attachments: views
+                    .iter()
+                    .map(|v| {
+                        Some(RenderingAttachmentInfo {
+                            load_op: AttachmentLoadOp::Clear,
+                            store_op: AttachmentStoreOp::Store,
+                            clear_value: Some([0.0, 0.0, 0.0, 1.0].into()),
+                            ..RenderingAttachmentInfo::image_view(v.target.clone())
+                        })
+                    })
+                    .collect(),
+                depth_attachment: None,
+                stencil_attachment: None,
+                ..Default::default()
+            })
+            .unwrap()
+            .set_viewport_with_count(
+                views
+                    .iter()
+                    .map(|v| Viewport {
+                        offset: [0.0, v.target_backing.extent()[1] as f32],
+                        extent: [
+                            v.target_backing.extent()[0] as f32,
+                            -(v.target_backing.extent()[1] as f32),
+                        ],
+                        depth_range: 0.0..=1.0,
+                    })
+                    .into_iter()
+                    .collect(),
             )
             .unwrap()
+            .set_scissor_with_count(views.iter().map(|_| Scissor::default()).collect())
+            .unwrap()
             .bind_pipeline_graphics(render_pipeline.pipeline.clone())
+            .unwrap()
+            .push_descriptor_set(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                render_pipeline.pipeline.layout().clone(),
+                1,
+                [WriteDescriptorSet::buffer(0, views_buffer)]
+                    .into_iter()
+                    .collect(),
+            )
             .unwrap()
             .bind_vertex_buffers(0, vertex_buffer.clone())
             .unwrap();
@@ -138,70 +195,17 @@ impl Renderer {
         // framebuffer.
         unsafe { builder.draw(vertex_buffer.len() as u32, 1, 0, 0) }.unwrap();
 
-        builder.end_render_pass(Default::default()).unwrap();
+        builder.end_rendering().unwrap();
     }
 }
+fn mask_from_len(len: usize) -> u32 {
+    2u32.pow(len as u32) - 1
+}
 pub struct RenderPipeline {
-    framebuffer: Arc<Framebuffer>,
     pipeline: Arc<GraphicsPipeline>,
 }
 impl RenderPipeline {
-    pub fn new(vk: &Renderer, views: &[View]) -> Self {
-        let render_pass = RenderPass::new(
-            vk.dev.clone(),
-            RenderPassCreateInfo {
-                attachments: views
-                    .iter()
-                    .map(|view| AttachmentDescription {
-                        format: view.target.format(),
-                        samples: SampleCount::Sample1,
-                        load_op: AttachmentLoadOp::Clear,
-                        store_op: AttachmentStoreOp::Store,
-                        initial_layout: ImageLayout::General,
-                        final_layout: ImageLayout::General,
-                        ..Default::default()
-                    })
-                    .collect(),
-                subpasses: vec![SubpassDescription {
-                    // The view mask indicates which layers of the framebuffer should be rendered for
-                    // each subpass.
-                    view_mask: (views.len() > 1)
-                        .then(|| 2u32.pow(views.len() as u32 + 1) - 1)
-                        .unwrap_or(0),
-                    color_attachments: views
-                        .iter()
-                        .enumerate()
-                        .map(|(i, _)| {
-                            Some(AttachmentReference {
-                                attachment: i as u32,
-                                layout: ImageLayout::General,
-                                ..Default::default()
-                            })
-                        })
-                        .collect(),
-                    ..Default::default()
-                }],
-                // The correlated view masks indicate sets of views that may be more efficient to render
-                // concurrently.
-                correlated_view_masks: (views.len() > 1)
-                    .then(|| vec![2u32.pow(views.len() as u32 + 1) - 1])
-                    .unwrap_or_default(),
-
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let framebuffer = unsafe {
-            Framebuffer::new_unchecked(
-                render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: views.iter().map(|view| view.target.clone()).collect(),
-                    layers: views.len() as u32,
-                    ..Default::default()
-                },
-            )
-        }
-        .unwrap();
+    pub fn new(vk: &Renderer, view_formats: &[Format]) -> Self {
         let pipeline = {
             let vs = vs::load(vk.dev.clone())
                 .unwrap()
@@ -216,14 +220,17 @@ impl RenderPipeline {
                 PipelineShaderStageCreateInfo::new(vs),
                 PipelineShaderStageCreateInfo::new(fs),
             ];
-            let layout = PipelineLayout::new(
-                vk.dev.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(vk.dev.clone())
-                    .unwrap(),
-            )
+            let layout = PipelineLayout::new(vk.dev.clone(), {
+                let mut v = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+                v.set_layouts[1].flags |= DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR;
+                v.set_layouts[1]
+                    .bindings
+                    .get_mut(&0)
+                    .unwrap()
+                    .descriptor_count = 1;
+                v.into_pipeline_layout_create_info(vk.dev.clone()).unwrap()
+            })
             .unwrap();
-            let subpass = Subpass::from(render_pass, 0).unwrap();
             GraphicsPipeline::new(
                 vk.dev.clone(),
                 None,
@@ -232,37 +239,38 @@ impl RenderPipeline {
                     vertex_input_state: Some(vertex_input_state),
                     input_assembly_state: Some(InputAssemblyState::default()),
                     viewport_state: Some(ViewportState {
-                        viewports: views
-                            .iter()
-                            .map(|v| Viewport {
-                                offset: [0.0, 0.0],
-                                extent: [
-                                    v.target_backing.extent()[0] as f32,
-                                    v.target_backing.extent()[1] as f32,
-                                ],
-                                depth_range: 0.0..=1.0,
-                            })
-                            .into_iter()
-                            .collect(),
-                        scissors: views.iter().map(|_| Scissor::default()).collect(),
+                        viewports: Default::default(),
+                        scissors: Default::default(),
                         ..Default::default()
                     }),
                     rasterization_state: Some(RasterizationState::default()),
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
-                        subpass.num_color_attachments(),
+                        view_formats.len() as u32,
                         ColorBlendAttachmentState::default(),
                     )),
-                    subpass: Some(subpass.into()),
+                    // color_blend_state:None,
+                    dynamic_state: HashSet::from_iter([
+                        DynamicState::ViewportWithCount,
+                        DynamicState::ScissorWithCount,
+                    ]),
+                    subpass: Some(PipelineSubpassType::BeginRendering(
+                        PipelineRenderingCreateInfo {
+                            view_mask: mask_from_len(view_formats.len()),
+                            color_attachment_formats: view_formats
+                                .iter()
+                                .copied()
+                                .map(Some)
+                                .collect(),
+                            ..PipelineRenderingCreateInfo::default()
+                        },
+                    )),
                     ..GraphicsPipelineCreateInfo::layout(layout)
                 },
             )
             .unwrap()
         };
-        Self {
-            framebuffer,
-            pipeline,
-        }
+        Self { pipeline }
     }
 }
 mod vs {
@@ -271,11 +279,16 @@ mod vs {
         src: r"
                 #version 450
                 #extension GL_EXT_multiview : enable
+                #extension GL_EXT_nonuniform_qualifier : enable
 
                 layout(location = 0) in vec3 position;
 
+                layout(set = 1, binding = 0) uniform InData {
+                    mat4 world_to_clip;
+                } views[];
+
                 void main() {
-                    gl_Position = vec4(position, 1.0) + gl_ViewIndex * vec4(0.25, 0.25, 0.25, 0.0);
+                    gl_Position = views[gl_ViewIndex].world_to_clip * vec4(position, 1.0);
                 }
             ",
     }
@@ -285,17 +298,18 @@ mod fs {
         ty: "fragment",
         src: r"
                 #version 450
+                #extension GL_EXT_multiview : enable
 
                 layout(location = 0) out vec4 f_color;
 
                 void main() {
-                    f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    f_color = vec4(1.0, 0.0, float(gl_ViewIndex)*0.25, 1.0);
                 }
             ",
     }
 }
 pub struct View {
-    pub world_to_view: Mat4,
+    pub world_to_clip: Mat4,
     pub target_backing: Arc<Image>,
     pub target: Arc<ImageView>,
 }
@@ -304,4 +318,9 @@ pub struct View {
 struct VertexData {
     #[format(R32G32B32_SFLOAT)]
     position: [f32; 3],
+}
+#[derive(BufferContents, Clone, Copy)]
+#[repr(C)]
+struct ViewData {
+    world_to_clip: [[f32; 4]; 4],
 }
