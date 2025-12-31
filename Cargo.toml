@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 glam = { version = "0.30.9", features = ["mint"] }
+stardust-xr-fusion = { git = "http://github.com/Schmarni-Dev/core.git", version = "0.50.0",branch = "dmatex" }
+# stardust-xr-molecules = { git = "http://github.com/StardustXR/molecules.git", version = "0.50.0" }
+timeline_syncobj = { version = "0.1.0", path = "../timeline_syncobj" }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
 vulkano = { version = "0.35.2", default-features = false, features = ["macros"] }

@@ -11,7 +11,7 @@ use vulkano::{
     descriptor_set::{WriteDescriptorSet, layout::DescriptorSetLayoutCreateFlags},
     device::{Device, DeviceExtensions, DeviceFeatures, Queue, physical::PhysicalDevice},
     format::Format,
-    image::{Image, view::ImageView},
+    image::view::ImageView,
     instance::{Instance, InstanceExtensions},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
@@ -102,6 +102,7 @@ impl Renderer {
     pub fn record_render_commands<L>(
         &self,
         views: &[View],
+        render_target: Arc<ImageView>,
         vertex_positions: &[Vec3],
         render_pipeline: &RenderPipeline,
         builder: &mut AutoCommandBufferBuilder<L>,
@@ -143,38 +144,31 @@ impl Renderer {
             .begin_rendering(RenderingInfo {
                 layer_count: 0,
                 view_mask: mask_from_len(views.len()),
-                color_attachments: views
-                    .iter()
-                    .map(|v| {
-                        Some(RenderingAttachmentInfo {
-                            load_op: AttachmentLoadOp::Clear,
-                            store_op: AttachmentStoreOp::Store,
-                            clear_value: Some([0.0, 0.0, 0.0, 1.0].into()),
-                            ..RenderingAttachmentInfo::image_view(v.target.clone())
-                        })
-                    })
-                    .collect(),
+                color_attachments: vec![Some(RenderingAttachmentInfo {
+                    load_op: AttachmentLoadOp::Clear,
+                    store_op: AttachmentStoreOp::Store,
+                    clear_value: Some([0.0, 0.0, 0.0, 1.0].into()),
+                    ..RenderingAttachmentInfo::image_view(render_target.clone())
+                })],
                 depth_attachment: None,
                 stencil_attachment: None,
                 ..Default::default()
             })
             .unwrap()
             .set_viewport_with_count(
-                views
-                    .iter()
-                    .map(|v| Viewport {
-                        offset: [0.0, v.target_backing.extent()[1] as f32],
-                        extent: [
-                            v.target_backing.extent()[0] as f32,
-                            -(v.target_backing.extent()[1] as f32),
-                        ],
-                        depth_range: 0.0..=1.0,
-                    })
-                    .into_iter()
-                    .collect(),
+                [Viewport {
+                    offset: [0.0, render_target.image().extent()[1] as f32],
+                    extent: [
+                        render_target.image().extent()[0] as f32,
+                        -(render_target.image().extent()[1] as f32),
+                    ],
+                    depth_range: 0.0..=1.0,
+                }]
+                .into_iter()
+                .collect(),
             )
             .unwrap()
-            .set_scissor_with_count(views.iter().map(|_| Scissor::default()).collect())
+            .set_scissor_with_count([Scissor::default()].into_iter().collect())
             .unwrap()
             .bind_pipeline_graphics(render_pipeline.pipeline.clone())
             .unwrap()
@@ -205,7 +199,7 @@ pub struct RenderPipeline {
     pipeline: Arc<GraphicsPipeline>,
 }
 impl RenderPipeline {
-    pub fn new(vk: &Renderer, view_formats: &[Format]) -> Self {
+    pub fn new(vk: &Renderer, view_format: Format, multiview_amount: Option<usize>) -> Self {
         let pipeline = {
             let vs = vs::load(vk.dev.clone())
                 .unwrap()
@@ -246,22 +240,17 @@ impl RenderPipeline {
                     rasterization_state: Some(RasterizationState::default()),
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
-                        view_formats.len() as u32,
+                        1,
                         ColorBlendAttachmentState::default(),
                     )),
-                    // color_blend_state:None,
                     dynamic_state: HashSet::from_iter([
                         DynamicState::ViewportWithCount,
                         DynamicState::ScissorWithCount,
                     ]),
                     subpass: Some(PipelineSubpassType::BeginRendering(
                         PipelineRenderingCreateInfo {
-                            view_mask: mask_from_len(view_formats.len()),
-                            color_attachment_formats: view_formats
-                                .iter()
-                                .copied()
-                                .map(Some)
-                                .collect(),
+                            view_mask: multiview_amount.map(|v| mask_from_len(v)).unwrap_or(1),
+                            color_attachment_formats: vec![Some(view_format)],
                             ..PipelineRenderingCreateInfo::default()
                         },
                     )),
@@ -310,8 +299,6 @@ mod fs {
 }
 pub struct View {
     pub world_to_clip: Mat4,
-    pub target_backing: Arc<Image>,
-    pub target: Arc<ImageView>,
 }
 #[derive(BufferContents, Vertex, Clone, Copy)]
 #[repr(C)]

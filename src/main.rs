@@ -24,7 +24,9 @@ use winit::{application::ApplicationHandler, event_loop::EventLoop, window::Wind
 
 use crate::renderer::{RenderPipeline, Renderer, View};
 
+pub mod mesh;
 pub mod renderer;
+// pub mod stardust_backend;
 
 fn main() {
     tracing_subscriber::fmt().init();
@@ -167,7 +169,7 @@ impl ApplicationHandler for WinitApp {
             )
             .unwrap()
         };
-        let render_pipeline = RenderPipeline::new(&self.renderer, &[image_format]);
+        let render_pipeline = RenderPipeline::new(&self.renderer, image_format, None);
 
         self.render_reqs = Some(RenderRequirements {
             window,
@@ -200,7 +202,6 @@ impl ApplicationHandler for WinitApp {
             // } => {}
             winit::event::WindowEvent::RedrawRequested => {
                 if let Some(reqs) = self.render_reqs.as_mut() {
-
                     if self.recreate_swapchain {
                         self.recreate_swapchain = false;
                         let (swap, images) = reqs
@@ -243,11 +244,8 @@ impl ApplicationHandler for WinitApp {
                             * Mat4::from_translation((Vec3::Y + Vec3::Z) * self.a))
                         .inverse();
                     self.renderer.record_render_commands(
-                        &[View {
-                            world_to_clip: mat,
-                            target_backing: target_image.clone(),
-                            target: ImageView::new_default(target_image).unwrap(),
-                        }],
+                        &[View { world_to_clip: mat }],
+                        ImageView::new_default(target_image).unwrap(),
                         vertex_positions,
                         &reqs.render_pipeline,
                         &mut builder,
