@@ -31,6 +31,7 @@ use vulkano::{
     render_pass::{AttachmentLoadOp, AttachmentStoreOp},
 };
 
+#[derive(Debug)]
 pub struct Renderer {
     pub instance: Arc<Instance>,
     pub phys_dev: Arc<PhysicalDevice>,
@@ -79,6 +80,8 @@ impl Renderer {
             dynamic_rendering: true,
             extended_dynamic_state: true,
             runtime_descriptor_array: true,
+            timeline_semaphore: true,
+            synchronization2: true,
             ..DeviceFeatures::empty()
         }
     }
@@ -147,7 +150,7 @@ impl Renderer {
                 color_attachments: vec![Some(RenderingAttachmentInfo {
                     load_op: AttachmentLoadOp::Clear,
                     store_op: AttachmentStoreOp::Store,
-                    clear_value: Some([0.0, 0.0, 0.0, 1.0].into()),
+                    clear_value: Some([0.0, 1.0, 1.0, 1.0].into()),
                     ..RenderingAttachmentInfo::image_view(render_target.clone())
                 })],
                 depth_attachment: None,

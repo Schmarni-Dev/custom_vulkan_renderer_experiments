@@ -388,9 +388,11 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 name = "custom_vulkan_renderer_exp"
 version = "0.1.0"
 dependencies = [
+ "drm-fourcc",
  "glam",
  "stardust-xr-fusion",
  "timeline_syncobj",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "vulkano",
@@ -479,6 +481,12 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "mint",
 ]
+
+[[package]]
+name = "drm-fourcc"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aafbcdb8afc29c1a7ee5fbe53b5d62f4565b35a042a662ca9fecd0b54dae6f4"
 
 [[package]]
 name = "endi"
@@ -2036,7 +2044,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-fusion"
 version = "0.50.0"
-source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#2872c05ffd7fc19f44b42c07d053bb4f551789c6"
+source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#8cf143b6e6431b449ffa54819522a27d465f88aa"
 dependencies = [
  "color-eyre",
  "convert_case",
@@ -2062,7 +2070,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-gluon"
 version = "0.50.0"
-source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#2872c05ffd7fc19f44b42c07d053bb4f551789c6"
+source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#8cf143b6e6431b449ffa54819522a27d465f88aa"
 dependencies = [
  "futures",
  "nanoid",
@@ -2075,7 +2083,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-protocol"
 version = "0.50.0"
-source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#2872c05ffd7fc19f44b42c07d053bb4f551789c6"
+source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#8cf143b6e6431b449ffa54819522a27d465f88aa"
 dependencies = [
  "fnv",
  "kdl",
@@ -2085,7 +2093,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-wire"
 version = "0.50.0"
-source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#2872c05ffd7fc19f44b42c07d053bb4f551789c6"
+source = "git+http://github.com/Schmarni-Dev/core.git?branch=dmatex#8cf143b6e6431b449ffa54819522a27d465f88aa"
 dependencies = [
  "dirs",
  "flatbuffers",
@@ -2432,9 +2440,8 @@ dependencies = [
 
 [[package]]
 name = "vulkano"
-version = "0.35.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee487adf7c13e5aa46d4d7fac6ffb8e172eb7e6472aaf815e9ade4992f8f2414"
+version = "0.35.1"
+source = "git+https://github.com/Schmarni-Dev/vulkano?branch=0_35_dmabuf_fixes#1fd43557d3acb3ddd2721f61b6939ab636ecd17a"
 dependencies = [
  "ash",
  "bytemuck",
@@ -2463,8 +2470,7 @@ dependencies = [
 [[package]]
 name = "vulkano-macros"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dc929c42c9336fd082079ac3ea30126e4a0dfe36fd2e2b3581303f7d140d20f"
+source = "git+https://github.com/Schmarni-Dev/vulkano?branch=0_35_dmabuf_fixes#1fd43557d3acb3ddd2721f61b6939ab636ecd17a"
 dependencies = [
  "proc-macro-crate 3.4.0",
  "proc-macro2",
@@ -3152,9 +3158,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac060176f7020d62c3bcc1cdbcec619d54f48b07ad1963a3f80ce7a0c17755f"
+checksum = "de9211a9f64b825911bdf0240f58b7a8dac217fe260fc61f080a07f61372fbd5"
 
 [[package]]
 name = "zvariant"

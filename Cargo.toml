@@ -4,12 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+drm-fourcc = "2.2.0"
 glam = { version = "0.30.9", features = ["mint"] }
 stardust-xr-fusion = { git = "http://github.com/Schmarni-Dev/core.git", version = "0.50.0",branch = "dmatex" }
 # stardust-xr-molecules = { git = "http://github.com/StardustXR/molecules.git", version = "0.50.0" }
 timeline_syncobj = { version = "0.1.0", path = "../timeline_syncobj" }
+tokio = { version = "1.48.0", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
-vulkano = { version = "0.35.2", default-features = false, features = ["macros"] }
+vulkano = { version = "0.35.0", default-features = false, features = ["macros"] }
 vulkano-shaders = "0.35.0"
 winit = { version = "0.30.12", default-features = false, features = ["mint", "rwh_06", "wayland"] }
+
+[patch.crates-io]
+vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes" }
+vulkano-macros = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes" }
