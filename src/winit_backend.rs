@@ -199,6 +199,7 @@ impl ApplicationHandler for WinitBackend {
                         vertex_positions,
                         &reqs.render_pipeline,
                         &mut builder,
+                        [0.0, 1.0, 1.0, 1.0],
                     );
                     self.a += 0.001;
                     let command_buffer = builder.build().unwrap();

@@ -1,20 +1,18 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
-use glam::{Mat4, Quat, UVec2, Vec3, vec3};
+use glam::{Mat4, UVec2, Vec3, vec3};
+use stardust_xr_cme::{
+    format::DmatexFormat, get_phys_dev_node_id, render_device::RenderDevice, swapchain::Swapchain,
+};
 use stardust_xr_fusion::{
     AsyncEventHandle, Client, ClientHandle,
-    drawable::{MaterialParameter, Model, ModelPartAspect, get_primary_render_device_id},
+    drawable::{MaterialParameter, Model, ModelPartAspect},
     project_local_resources,
     root::{RootAspect, RootEvent},
     spatial::Transform,
     values::ResourceID,
 };
-use timeline_syncobj::render_node::DrmRenderNode;
-use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::info;
 use vulkano::{
     VulkanLibrary,
     command_buffer::{
@@ -27,23 +25,17 @@ use vulkano::{
     },
     format::Format,
     image::{ImageUsage, view::ImageView},
-    instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions},
+    instance::{Instance, InstanceCreateInfo, InstanceExtensions},
     memory::allocator::StandardMemoryAllocator,
-    sync::{
-        PipelineStages,
-        semaphore::{Semaphore, SemaphoreWaitFlags, SemaphoreWaitInfo},
-    },
 };
 
 use crate::{
     renderer::{RenderPipeline, Renderer, View},
-    stardust_backend::{DmatexFormat, Swapchain, get_phys_dev_node_id},
     winit_backend::WinitBackend,
 };
 
 pub mod mesh;
 pub mod renderer;
-pub mod stardust_backend;
 pub mod winit_backend;
 
 pub trait Backend {
@@ -70,7 +62,8 @@ async fn main() {
         .unwrap();
     let async_loop = client.async_event_loop();
     let client = async_loop.client_handle.clone();
-    let render_node_id = get_primary_render_device_id(&client).await.unwrap();
+    let render_dev = RenderDevice::primary_server_device(&client).await.unwrap();
+    let render_node_id = render_dev.drm_node_id();
 
     let winit_init = WinitBackend::create_init();
     let library = VulkanLibrary::new().unwrap();
@@ -161,12 +154,12 @@ async fn main() {
     ));
     tokio::spawn(stardust_loop(
         async_loop.get_event_handle(),
+        render_dev,
         client,
         renderer.clone(),
     ))
     .await
     .unwrap();
-
     // tokio::task::block_in_place(|| {
     //     WinitBackend::create(winit_init, renderer.clone()).run();
     // });
@@ -174,34 +167,32 @@ async fn main() {
 
 async fn stardust_loop(
     event_handle: AsyncEventHandle,
+    render_dev: RenderDevice,
     client: Arc<ClientHandle>,
     renderer: Arc<Renderer>,
 ) {
     let res = UVec2::new(512, 512);
-    let render_node_id = get_primary_render_device_id(&client).await.unwrap();
-    let render_node = DrmRenderNode::new(render_node_id).unwrap();
     let model = Model::create(
         client.get_root(),
-        Transform::identity(),
+        Transform::from_scale([0.1; 3]),
         &ResourceID::new_namespaced("vk", "panel"),
     )
     .unwrap();
-    let formats = DmatexFormat::enumerate(&client, render_node_id)
-        .await
-        .unwrap();
+    let formats = DmatexFormat::enumerate(&client, &render_dev).await.unwrap();
     let format = formats.get(&Format::R8G8B8A8_SRGB).unwrap();
     let render_pipeline = RenderPipeline::new(&renderer, Format::R8G8B8A8_SRGB, None);
+
     let mut swapchain = Swapchain::new(
         &client,
         &renderer.dev,
-        &render_node,
+        &render_dev,
         stardust_xr_fusion::drawable::DmatexSize::Dim2D(res.into()),
         format,
         None,
         ImageUsage::COLOR_ATTACHMENT,
     );
     let panel = model.part("Panel").unwrap();
-    sleep(Duration::from_millis(100)).await;
+    let mut last_frame = Instant::now();
     loop {
         event_handle.wait().await;
         let frame_info = match client.get_root().recv_root_event() {
@@ -214,20 +205,18 @@ async fn stardust_loop(
                 continue;
             }
         };
-        info!("about to wait on next image");
-        let info = swapchain.next().await;
-        info!("waited on next image");
 
         let ratio = res.x as f32 / res.y as f32;
         let mat = Mat4::perspective_rh(90f32.to_radians(), ratio, 0.0, 1000.0)
             // * (Mat4::from_quat(Quat::from_rotation_z(0.3 * frame_info.elapsed))
-            //     * Mat4::from_translation((Vec3::Y + Vec3::Z) * frame_info.elapsed))
+                * Mat4::from_translation( Vec3::Z * frame_info.elapsed * 0.1)
             .inverse();
         let vertex_positions = &[
             vec3(-1.0, 0.0, -0.5),
             vec3(-1.0, 1.0, -0.5),
             vec3(1.0, 1.0, -0.5),
         ];
+        let info = swapchain.prepare_next_image();
         let mut builder = AutoCommandBufferBuilder::primary(
             renderer.cballoc.clone(),
             renderer.render_queue.queue_family_index(),
@@ -236,62 +225,35 @@ async fn stardust_loop(
         .unwrap();
         renderer.record_render_commands(
             &[View { world_to_clip: mat }],
-            ImageView::new_default(info.image).unwrap(),
+            ImageView::new_default(info.image()).unwrap(),
             vertex_positions,
             &render_pipeline,
             &mut builder,
+            [1.0, 0.0, 1.0, 1.0],
         );
         let buffer = builder.build().unwrap();
-        let timeline_semaphore = Arc::new(
-            Semaphore::new(
-                renderer.dev.clone(),
-                vulkano::sync::semaphore::SemaphoreCreateInfo {
-                    semaphore_type: vulkano::sync::semaphore::SemaphoreType::Timeline,
-                    initial_value: 0,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
+        let param = info.submit(
+            &renderer.dev,
+            &renderer.render_queue,
+            |wait_semaphore, mut queue, submit_semaphore| unsafe {
+                queue
+                    .submit(
+                        &[SubmitInfo {
+                            command_buffers: vec![CommandBufferSubmitInfo::new(buffer)],
+                            wait_semaphores: vec![SemaphoreSubmitInfo::new(wait_semaphore)],
+                            signal_semaphores: vec![SemaphoreSubmitInfo::new(submit_semaphore)],
+                            ..Default::default()
+                        }],
+                        None,
+                    )
+                    .unwrap();
+            },
         );
-        renderer.render_queue.with(|mut queue| unsafe {
-            queue
-                .submit(
-                    &[SubmitInfo {
-                        command_buffers: vec![CommandBufferSubmitInfo::new(buffer)],
-                        signal_semaphores: vec![
-                            // SemaphoreSubmitInfo {
-                            //     stages: PipelineStages::COLOR_ATTACHMENT_OUTPUT,
-                            //     ..SemaphoreSubmitInfo::new(info.server_acquire_semaphore)
-                            // },
-                            SemaphoreSubmitInfo {
-                                value: 1,
-                                stages: PipelineStages::ALL_COMMANDS,
-                                ..SemaphoreSubmitInfo::new(timeline_semaphore.clone())
-                            },
-                        ],
-                        ..Default::default()
-                    }],
-                    None,
-                )
-                .unwrap()
-        });
-        let time = Instant::now();
-        timeline_semaphore
-            .wait(
-                SemaphoreWaitInfo {
-                    value: 1,
-                    ..Default::default()
-                },
-                None,
-            )
-            .unwrap();
-        let diff = time.elapsed().as_secs_f64() * 1000.0;
-
-        warn!("render time: {diff}ms");
-        unsafe { info.tex.timeline.signal(info.material_param.acquire_point) }.unwrap();
+        let delta = last_frame.elapsed().as_secs_f64() * 1000.0;
+        info!("stardust frametime: {delta}ms");
         panel
-            .set_material_parameter("diffuse", MaterialParameter::Dmatex(info.material_param))
+            .set_material_parameter("diffuse", MaterialParameter::Dmatex(param))
             .unwrap();
-        info!("param set");
+        last_frame = Instant::now();
     }
 }

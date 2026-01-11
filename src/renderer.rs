@@ -109,6 +109,7 @@ impl Renderer {
         vertex_positions: &[Vec3],
         render_pipeline: &RenderPipeline,
         builder: &mut AutoCommandBufferBuilder<L>,
+        clear_color: [f32;4],
     ) {
         let vertex_buffer = Buffer::from_iter(
             self.malloc.clone(),
@@ -150,7 +151,7 @@ impl Renderer {
                 color_attachments: vec![Some(RenderingAttachmentInfo {
                     load_op: AttachmentLoadOp::Clear,
                     store_op: AttachmentStoreOp::Store,
-                    clear_value: Some([0.0, 1.0, 1.0, 1.0].into()),
+                    clear_value: Some(clear_color.into()),
                     ..RenderingAttachmentInfo::image_view(render_target.clone())
                 })],
                 depth_attachment: None,
