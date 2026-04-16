@@ -27,6 +27,7 @@ use vulkano::{
     image::{ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateInfo, InstanceExtensions},
     memory::allocator::StandardMemoryAllocator,
+    swapchain::{PresentInfo, SwapchainPresentInfo},
 };
 
 use crate::{

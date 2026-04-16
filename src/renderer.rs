@@ -281,7 +281,8 @@ mod vs {
                 } views[];
 
                 void main() {
-                    gl_Position = views[gl_ViewIndex].world_to_clip * vec4(position, 1.0);
+                    vec4 tmp_pos = views[gl_ViewIndex].world_to_clip * vec4(position, 1.0);
+                    gl_Position = tmp_pos / tmp_pos.w;
                 }
             ",
     }
